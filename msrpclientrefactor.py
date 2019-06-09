@@ -1,14 +1,48 @@
-import tkinter as tk
-import os
-import threading
-import uuid
-import select, socket, queue
+"""
+Message format:
+        transaction_object definition:
+            0: transaction_id
+            1: request_type
+            2: response_code
+            3: to_path
+            4: from_path
+            5: message_id
+            6: byte_range
+            7: content_type
+            8: success_report
+            9: failure_report
+            10: body
+            11: decode
 
-global SEND_message
+"""
+
+import tkinter as tk
+import threading
+import select, socket, queue
+import logging
+from os import _exit
+from uuid import uuid4
+from time import sleep
+
+LOG_FORMAT = "%(asctime)s %(filename)s:%(lineno)-3d %(levelname)s %(message)s"
+
+FORMATTER = logging.Formatter(LOG_FORMAT)
+
+CONSOLE_HANDLER = logging.StreamHandler()
+CONSOLE_HANDLER.setFormatter(FORMATTER)
+
+LOGGER = logging.getLogger()
+LOGGER.addHandler(CONSOLE_HANDLER)
+LOGGER.setLevel('DEBUG')
+
+global SEND_message, message_queues, outputs, object_dictionary
 SEND_message = None
+message_queues = {}
+outputs = []
+object_dictionary = {}
+
 
 class Window(tk.Frame):
-
 
     def __init__(self, master = None):
 
@@ -31,15 +65,14 @@ class Window(tk.Frame):
         self.text_box = tk.Text(self.master)
         self.text_box.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=True)
 
-
     def start_server(self):
 
         t = threading.Thread(target=self.server_content)
         t.start()
 
-
     def add_to_window(self, text):
 
+        text = text + '\n'
         def append():
             self.text_box.configure(state='normal')
             self.text_box.insert(tk.END, text)
@@ -96,85 +129,190 @@ class Window(tk.Frame):
 
     def send_msg(self):
 
+        logging.debug('Creating new message to send.')
         global SEND_message
         to_path = e1.get().rstrip()
         from_path = e2.get().rstrip()
         message = e3.get("1.0", tk.END).rstrip()
-        transaction_id = uuid.uuid4()
+        transaction_id = uuid4()
         transaction_id = str(transaction_id)[:15]
-        message_id = uuid.uuid4()
+        transaction_id = transaction_id.replace('-','')
+        message_id = uuid4()
         message_id = str(message_id)[:15]
+        message_id = message_id.replace('-','')
         message_length = (len(message))
         content_type = 'text/plain'
 
-        SEND_message = f'MSRP {transaction_id} SEND\n'
-        SEND_message += f'To-Path: {to_path}\n'
-        SEND_message += f'From-Path: {from_path}\n'
-        SEND_message += f'Message-ID: {message_id}\n'
-        SEND_message += f'Byte-Range: 1-{message_length}/{message_length}\n'
-        SEND_message += f'Content-Type: {content_type}\n'
-        SEND_message += '\n'
-        SEND_message += f'{message}\n'
-        SEND_message += f'-------{transaction_id}\n'
-        self.add_to_window(SEND_message)
+        SEND_message = f'MSRP {transaction_id} SEND\r\n'
+        SEND_message += f'To-Path: {to_path}\r\n'
+        SEND_message += f'From-Path: {from_path}\r\n'
+        SEND_message += f'Message-ID: {message_id}\r\n'
+        SEND_message += f'Success-Report: yes\r\n'
+        SEND_message += f'Byte-Range: 1-{message_length}/{message_length}\r\n'
+        SEND_message += f'Content-Type: {content_type}\r\n'
+        SEND_message += '\r\n'
+        SEND_message += f'{message}\r\n'
+        SEND_message += f'-------{transaction_id}$\r\n'
 
-        # message_queues[writable[0]].put(SEND_message)
+        for aQueue in message_queues:
+            logging.debug('Adding new message to output queue.')
+            message_queues[aQueue].put(SEND_message.encode('utf8'))
+            outputs.append(aQueue)
+
+    def send_report(self, message_object):
+
+        transaction_id = uuid4()
+        transaction_id = str(transaction_id)[:15]
+        transaction_id = transaction_id.replace('-','')
+
+        SEND_message = f'MSRP {transaction_id} REPORT\r\n'
+        SEND_message += f'To-Path: {message_object[4]}\r\n'
+        SEND_message += f'From-Path: {message_object[3]}\r\n'
+        SEND_message += f'Message-ID: {message_object[5]}\r\n'
+        SEND_message += f'Byte-Range: 1-{message_object[6]}/{message_object[6]}\r\n'
+        SEND_message += f'Status: 000 200 OK\r\n'
+        SEND_message += f'-------{transaction_id}$\r\n'
+
+        for aQueue in message_queues:
+            logging.debug('Adding new message to output queue.')
+            message_queues[aQueue].put(SEND_message.encode('utf8'))
+            outputs.append(aQueue)
+
+    def send_200_response(self, message_object):
+
+        SEND_message = f'MSRP {message_object[0]} 200 OK\r\n'
+        SEND_message += f'To-Path: {message_object[4]}\r\n'
+        SEND_message += f'From-Path: {message_object[3]}\r\n'
+        SEND_message += f'-------{message_object[0]}$\r\n'
+
+        for aQueue in message_queues:
+            logging.debug('Adding 200 response to output queue.')
+            message_queues[aQueue].put(SEND_message.encode('utf8'))
+            outputs.append(aQueue)
+
+        sleep(1)
+        logging.debug(f'Success status: {message_object[8]}')
+        if message_object[8] == 'yes':  # check success report request
+            logging.debug("Success report request true, send REPORT")
+            self.send_report(message_object)
+
+    def message_decode(self, content):
+
+        transaction_id = None
+        request_type = None
+        response_code = None
+        to_path = None
+        from_path = None
+        message_id = None
+        byte_range = None
+        content_type = None
+        success_report = None
+        failure_report = None
+        body = None
+        decode = True
+
+        try:
+            for line in content.splitlines():
+                if line[:7] == "-------":
+                    pass
+                elif line[:4] == "MSRP":
+                    scratch = line.split(" ")
+                    transaction_id = scratch[1].strip()
+                    if scratch[2].strip() == "SEND":
+                        request_type = "SEND"
+                    elif scratch[2].strip() == "REPORT":
+                        request_type = "REPORT"
+                    else:
+                        response_code = scratch[2]
+                else:
+                    scratch = line.split(":")
+                    logging.debug(f'Print line debug: {scratch}')
+                    if scratch[0] == "To-Path":
+                        to_path = scratch[1].strip()
+                    elif scratch[0] == "From-Path":
+                        from_path = scratch[1].strip()
+                    elif scratch[0] == "Message-ID":
+                        message_id = scratch[1].strip()
+                    elif scratch[0] == "Content-Type":
+                        content_type = scratch[1].strip()
+                    elif scratch[0] == "Byte-Range":
+                        byte_range = scratch[1].split("/")[1].strip()
+                    elif scratch[0] == "Success-Report":
+                        success_report = scratch[1].strip()
+                        logging.debug(f'Success report decoded as: {success_report}')
+                    elif scratch[0] == "Failure-Report":
+                        failure_report = scratch[1].strip()
+                    elif scratch[0] == "\r\n":
+                        pass
+                    else:
+                        body = scratch[0].strip()
+        except IndexError:
+            pass
+        except ValueError:
+            logging.error("Message decode failure.")
+            logging.error(content)
+            decode = False
+
+        transaction_object = [
+            transaction_id,
+            request_type,
+            response_code,
+            to_path,
+            from_path,
+            message_id,
+            byte_range,
+            content_type,
+            success_report,
+            failure_report,
+            body,
+            decode
+        ]
+        logging.debug("Message decode complete.")
+
+        return transaction_object
 
     def server_content(self):
 
-        global SEND_message
+        global SEND_message, message_queues, outputs
         host = '127.0.0.1'
         port = 10000
         client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         client.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         client.connect((host, port))
-        print(f"connected to {host}:{port}")
+        logging.debug(f"connected to {host}:{port}")
 
         inputs = [client]
         outputs = []
-        message_queues = {}
         client.setblocking(0)
-        inputs.append(client)
         message_queues[client] = queue.Queue()
-        # nonlocal message_queues
-        # message_queues = {}
 
-        print('before while')
         while inputs:
-            print('in while')
+            logging.debug('Socket wait.')
             readable, writable, exceptional = select.select(
-                inputs, outputs, inputs)
-            print('after select.select')
-            if SEND_message:
-                client.send(bytes(SEND_message, 'utf-8'))
-                SEND_message = None
+                inputs, outputs, inputs, 1)
+            logging.debug('Socket go.')
             data = ""
             decoded_data = ""
             for s in readable:
-                print('in readable')
+                logging.debug('Reading data next.')
                 while data != b'$':
-                    #print('reading data')
-                    data = s.recv(1)
-                    decoded_data += data.decode("utf-8")
+                    try:
+                        data = s.recv(1)
+                        decoded_data += data.decode("utf-8")
+                    except (BlockingIOError, socket.error):
+                        logging.debug('Error occurred, continue.')
+                        sleep(0.5)
+                        break
 
-                print(decoded_data)
                 self.add_to_window(decoded_data)
-                #print(data.decode("utf-8"))
-                # if data:
-                #     message_queues[s].put(data)
-                #     if s not in outputs:
-                #         outputs.append(s)
-                # else:
-                #
-                #     if s in outputs:
-                #         outputs.remove(s)
-                #     inputs.remove(s)
-                #     s.close()
-                #     del message_queues[s]
-                inputs.remove(s)
+                logging.debug('Done reading data.')
+
+                decoded_message = self.message_decode(decoded_data)
+                if decoded_message[1] == "SEND":
+                    self.send_200_response(decoded_message)
 
             for s in writable:
-                print('in writable')
+                logging.debug('Sending data next.')
 
                 try:
                     next_msg = message_queues[s].get_nowait()
@@ -182,10 +320,12 @@ class Window(tk.Frame):
                     outputs.remove(s)
                 else:
                     s.send(next_msg)
-                    self.add_to_window(next_msg)
+                    self.add_to_window(next_msg.decode('utf8'))
+                    outputs.remove(s)
+                    logging.debug('Data sent.')
 
             for s in exceptional:
-                print('in exceptional')
+                logging.debug('Exception handling.')
                 inputs.remove(s)
                 if s in outputs:
                     outputs.remove(s)
@@ -195,7 +335,7 @@ class Window(tk.Frame):
 
     @staticmethod
     def client_exit():
-        os._exit(1)
+        _exit(1)
 
 
 class MSRPServer(tk.Frame):
@@ -204,6 +344,7 @@ class MSRPServer(tk.Frame):
     app.geometry("600x800")
     main_app = Window(app)
     app.mainloop()
+
 
 if __name__ == "__main__":
 
