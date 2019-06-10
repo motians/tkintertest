@@ -62,6 +62,18 @@ class Window(tk.Frame):
         start_server_button = tk.Button(self, text="Start", command=self.start_server)
         start_server_button.pack(side=tk.LEFT, padx=5)
 
+        self.success_checkbox = tk.IntVar()
+        checkbutton1 = tk.Checkbutton(self, text="Success report", variable=self.success_checkbox)
+        checkbutton1.pack(side=tk.LEFT)
+
+        self.failure_checkbox = tk.IntVar()
+        checkbutton2 = tk.Checkbutton(self, text="Failure report", variable=self.failure_checkbox)
+        checkbutton2.pack(side=tk.LEFT)
+
+        self.report_checkbox = tk.IntVar()
+        checkbutton3 = tk.Checkbutton(self, text="Add report headers", variable=self.report_checkbox)
+        checkbutton3.pack(side=tk.LEFT)
+
         self.text_box = tk.Text(self.master)
         self.text_box.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=True)
 
@@ -147,7 +159,15 @@ class Window(tk.Frame):
         SEND_message += f'To-Path: {to_path}\r\n'
         SEND_message += f'From-Path: {from_path}\r\n'
         SEND_message += f'Message-ID: {message_id}\r\n'
-        SEND_message += f'Success-Report: yes\r\n'
+        if self.report_checkbox.get():
+            if self.success_checkbox.get():
+                SEND_message += f'Success-Report: yes\r\n'
+            else:
+                SEND_message += f'Success-Report: no\r\n'
+            if self.failure_checkbox.get():
+                SEND_message += f'Failure-Report: yes\r\n'
+            else:
+                SEND_message += f'Failure-Report: no\r\n'
         SEND_message += f'Byte-Range: 1-{message_length}/{message_length}\r\n'
         SEND_message += f'Content-Type: {content_type}\r\n'
         SEND_message += '\r\n'
