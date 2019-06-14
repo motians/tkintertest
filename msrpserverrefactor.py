@@ -59,8 +59,8 @@ class Window(tk.Frame):
         self.open_cmd_button = tk.Button(self, text="Send", command=self.cmd_win)
         self.open_cmd_button.pack(side=tk.LEFT, padx=5)
 
-        start_server_button = tk.Button(self, text="Start", command=self.start_server)
-        start_server_button.pack(side=tk.LEFT, padx=5)
+        self.start_server_button = tk.Button(self, text="Start", command=self.start_server)
+        self.start_server_button.pack(side=tk.LEFT, padx=5)
 
         self.success_checkbox = tk.IntVar()
         checkbutton1 = tk.Checkbutton(self, text="Success report", variable=self.success_checkbox)
@@ -78,6 +78,8 @@ class Window(tk.Frame):
         self.text_box.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=True)
 
     def start_server(self):
+
+        self.start_server_button.config(state=tk.DISABLED)
 
         t = threading.Thread(target=self.server_content)
         t.start()
@@ -99,7 +101,7 @@ class Window(tk.Frame):
         global e3
 
         self.open_cmd_button.config(state=tk.DISABLED)
-        
+
         def close_win():
             self.command_window.destroy()
 
