@@ -56,8 +56,8 @@ class Window(tk.Frame):
         quit_button = tk.Button(self, text="Quit", command=self.client_exit)
         quit_button.pack(side=tk.LEFT, padx=5)
 
-        open_cmd_button = tk.Button(self, text="Send", command=self.cmd_win)
-        open_cmd_button.pack(side=tk.LEFT, padx=5)
+        self.open_cmd_button = tk.Button(self, text="Send", command=self.cmd_win)
+        self.open_cmd_button.pack(side=tk.LEFT, padx=5)
 
         start_server_button = tk.Button(self, text="Start", command=self.start_server)
         start_server_button.pack(side=tk.LEFT, padx=5)
@@ -98,6 +98,8 @@ class Window(tk.Frame):
         global e2
         global e3
 
+        self.open_cmd_button.config(state=tk.DISABLED)
+        
         def close_win():
             self.command_window.destroy()
 
