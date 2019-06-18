@@ -20,9 +20,10 @@ import tkinter as tk
 import threading
 import select, socket, queue
 import logging
-from os import _exit
+from os import _exit, environ
 from uuid import uuid4
 from time import sleep
+
 
 LOG_FORMAT = "%(asctime)s %(filename)s:%(lineno)-3d %(levelname)s %(message)s"
 
@@ -35,16 +36,29 @@ LOGGER = logging.getLogger()
 LOGGER.addHandler(CONSOLE_HANDLER)
 LOGGER.setLevel('DEBUG')
 
-global SEND_message, message_queues, outputs, object_dictionary
+global SEND_message, message_queues, outputs, object_dictionary, SERVER_IP, SERVER_PORT
 SEND_message = None
 message_queues = {}
 outputs = []
 object_dictionary = {}
 
+if 'TEST_HOST_IP' in environ:
+    SERVER_IP = environ('TEST_HOST_IP')
+else:
+    SERVER_IP = '127.0.0.1'
+
+if 'TEST_HOST_PORT' in environ:
+    SERVER_PORT = environ('TEST_HOST_PORT')
+else:
+    SERVER_PORT = 10000
+
 
 class Window(tk.Frame):
+    """
+    Main application class and window management.
+    """
 
-    def __init__(self, master = None):
+    def __init__(self, master=None):
 
         tk.Frame.__init__(self, master)
 
@@ -74,10 +88,15 @@ class Window(tk.Frame):
         checkbutton3 = tk.Checkbutton(self, text="Add report headers", variable=self.report_checkbox)
         checkbutton3.pack(side=tk.LEFT)
 
+        self.error_response = tk.IntVar()
+        checkbutton4 = tk.Checkbutton(self, text="Send 400 response.", variable=self.error_response)
+        checkbutton4.pack(side=tk.LEFT)
+
         self.text_box = tk.Text(self.master)
         self.text_box.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=True)
 
     def start_server(self):
+        """ Start TCP server connection in seperator thread. """
 
         self.start_server_button.config(state=tk.DISABLED)
 
@@ -85,8 +104,10 @@ class Window(tk.Frame):
         t.start()
 
     def add_to_window(self, text):
+        """ Adds text to the main log window. """
 
         text = text + '\n'
+
         def append():
             self.text_box.configure(state='normal')
             self.text_box.insert(tk.END, text)
@@ -95,6 +116,7 @@ class Window(tk.Frame):
         self.text_box.after(0, append)
 
     def cmd_win(self):
+        """ Opens a new window for entering a new text message. """
 
         global e1
         global e2
@@ -144,6 +166,7 @@ class Window(tk.Frame):
         e2.pack(side=tk.BOTTOM)
 
     def send_msg(self):
+        """ Formats and puts the MSRP message into the queue for sending to the server. """
 
         logging.debug(f'Sucess report status: {self.success_checkbox.get()}')
         logging.debug(f'Sucess report status: {self.failure_checkbox.get()}')
@@ -154,10 +177,10 @@ class Window(tk.Frame):
         message = e3.get("1.0", tk.END).rstrip()
         transaction_id = uuid4()
         transaction_id = str(transaction_id)[:15]
-        transaction_id = transaction_id.replace('-','')
+        transaction_id = transaction_id.replace('-', '')
         message_id = uuid4()
         message_id = str(message_id)[:15]
-        message_id = message_id.replace('-','')
+        message_id = message_id.replace('-', '')
         message_length = (len(message))
         content_type = 'text/plain'
 
@@ -186,10 +209,11 @@ class Window(tk.Frame):
             outputs.append(aQueue)
 
     def send_report(self, message_object):
+        """ Formats and puts the MSRP REPORT message into the output gueue. """
 
         transaction_id = uuid4()
         transaction_id = str(transaction_id)[:15]
-        transaction_id = transaction_id.replace('-','')
+        transaction_id = transaction_id.replace('-', '')
 
         SEND_message = f'MSRP {transaction_id} REPORT\r\n'
         SEND_message += f'To-Path: {message_object[4]}\r\n'
@@ -204,9 +228,14 @@ class Window(tk.Frame):
             message_queues[aQueue].put(SEND_message.encode('utf8'))
             outputs.append(aQueue)
 
-    def send_200_response(self, message_object):
+    def send_200_response(self, message_object, response_code):
+        """ Formats and puts a 200 response into the output queue. """
 
-        SEND_message = f'MSRP {message_object[0]} 200 OK\r\n'
+        if response_code == '200':
+            SEND_message = f'MSRP {message_object[0]} 200 OK\r\n'
+        else:
+            SEND_message = f'MSRP {message_object[0]} 400 Bad Request\r\n'
+
         SEND_message += f'To-Path: {message_object[4]}\r\n'
         SEND_message += f'From-Path: {message_object[3]}\r\n'
         SEND_message += f'-------{message_object[0]}$\r\n'
@@ -218,11 +247,13 @@ class Window(tk.Frame):
 
         sleep(1)
         logging.debug(f'Success status: {message_object[8]}')
-        if message_object[8] == 'yes':  # check success report request
-            logging.debug("Success report request true, send REPORT")
-            self.send_report(message_object)
+        if response_code == '200':
+            if message_object[8] == 'yes':  # check success report request
+                logging.debug("Success report request true, send REPORT")
+                self.send_report(message_object)
 
     def message_decode(self, content):
+        """ Decodes a received message and populates the transaction object list. """
 
         transaction_id = None
         request_type = None
@@ -298,18 +329,17 @@ class Window(tk.Frame):
         return transaction_object
 
     def server_content(self):
+        """ Starts and manages main TCP socket connection to the server. """
 
         global SEND_message, message_queues, outputs
-        host = '127.0.0.1'
-        port = 10000
         client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         client.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        client.connect((host, port))
-        logging.debug(f"connected to {host}:{port}")
+        client.connect((SERVER_IP, SERVER_PORT))
+        logging.debug(f"connected to {SERVER_IP}:{SERVER_PORT}")
 
         inputs = [client]
         outputs = []
-        client.setblocking(0)
+        client.setblocking(False)
         message_queues[client] = queue.Queue()
 
         while inputs:
@@ -335,7 +365,10 @@ class Window(tk.Frame):
 
                 decoded_message = self.message_decode(decoded_data)
                 if decoded_message[1] == "SEND":
-                    self.send_200_response(decoded_message)
+                    if self.error_response.get():
+                        self.send_200_response(decoded_message, '400')
+                    else:
+                        self.send_200_response(decoded_message, '200')
 
             for s in writable:
                 logging.debug('Sending data next.')
@@ -358,7 +391,6 @@ class Window(tk.Frame):
                 s.close()
                 del message_queues[s]
 
-
     @staticmethod
     def client_exit():
         _exit(1)
@@ -367,7 +399,7 @@ class Window(tk.Frame):
 class MSRPServer(tk.Frame):
 
     app = tk.Tk()
-    app.geometry("600x800")
+    app.geometry("700x600")
     main_app = Window(app)
     app.mainloop()
 
